@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless Express Application/API powered by API Gateway and Lambda
+Parameters:
+  DomainName:
+    Type: String
+    Description: API Domain name
+    Default: ''
+  AllowedIPAddresses:
+    Type: List<String>
+    Description: List of IP addresses allowed to access the API
+    Default: 116.103.238.32/32
+Conditions:
+  UseDomainName:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: DomainName
+      - ''
+Resources:
+  ExpressApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+  MyIPSet:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Name: MyIPSet
+      Scope: REGIONAL
+      IPAddressVersion: IPV4
+      Addresses:
+        Ref: AllowedIPAddresses
+  WAFWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: MyWebACL
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      Rules:
+      - Name: AllowSpecificIPs
+        Priority: 0
+        Action:
+          Allow: {}
+        Statement:
+          IPSetReferenceStatement:
+            ARN:
+              Fn::GetAtt:
+              - MyIPSet
+              - Arn
+        VisibilityConfig:
+          SampledRequestsEnabled: true
+          CloudWatchMetricsEnabled: true
+          MetricName: AllowSpecificIPsMetric
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: MyWebACLMetric
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Origins:
+        - DomainName:
+            Fn::Sub: ${ExpressApi}.execute-api.${AWS::Region}.amazonaws.com
+          Id: myApiOrigin
+          CustomOriginConfig:
+            HTTPPort: 80
+            HTTPSPort: 443
+            OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: myApiOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+          - GET
+          - HEAD
+          CachedMethods:
+          - GET
+          - HEAD
+        DefaultRootObject: ''
+        HttpVersion: http2
+  MyWebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    DependsOn:
+    - ExpressApi
+    - ExpressApiStage
+    Properties:
+      ResourceArn:
+        Fn::GetAtt:
+        - CloudFrontDistribution
+        - ARN
+      WebACLArn:
+        Fn::GetAtt:
+        - WAFWebACL
+        - Arn
+  ExpressLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ExpressLambdaFunction
+      PackageType: Zip
+      Runtime: nodejs20.x
+      Environment:
+        Variables:
+          PRIVATE_KEY: c37d1fab972394cba9375ac5eb1c1fb5650c4b6ad37f37deb441e899f109e985
+          RPC: https://bsc-dataseed1.binance.org/
+          CHAIN_ID: 56
+          PUBLIC_ADDRESS: '0xa294E3AaF2fe5662ff4a017Ee55B167B30d74e9f'
+          CONTRACT_ADDRESS_ADD_REWARD: '0xcbeF0f790a2F8271b707529Bc422bC8161B98B5E'
+      Handler: lambda.handler
+      MemorySize: 1024
+      Timeout: 30
+      Events:
+        ProxyApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: ExpressApi
+    Metadata:
+      SamResourceId: ExpressLambdaFunction
+Outputs:
+  LambdaFunctionConsoleUrl:
+    Description: Console URL for the Lambda Function.
+    Value:
+      Fn::Sub: https://${AWS::Region}.console.aws.amazon.com/lambda/home?region=${AWS::Region}#/functions/${ExpressLambdaFunction}
+  ApiGatewayApiConsoleUrl:
+    Description: Console URL for the API Gateway API's Stage.
+    Value:
+      Fn::Sub: https://${AWS::Region}.console.aws.amazon.com/apigateway/home?region=${AWS::Region}#/apis/${ExpressApi}/stages/prod
+  ApiUrl:
+    Description: Invoke URL for your API. Clicking this link will perform a GET request
+      on the root resource of your API.
+    Value:
+      Fn::Sub: https://${ExpressApi}.execute-api.${AWS::Region}.amazonaws.com/
+  LambdaFunctionName:
+    Description: Name of the Serverless Express Lambda Function
+    Value:
+      Ref: ExpressLambdaFunction
